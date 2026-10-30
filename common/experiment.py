@@ -234,19 +234,29 @@ def guard(results, question_hash):
         open(path, "w").write(question_hash)
 
 
-def run_all(questions, question_hash, results, systems, k_values, workers=16, passes=3, show_every=50):
+def run_all(questions, question_hash, results, systems, k_values, workers=16, passes=3, show_every=None):
     """systems: {name: (client, model, ona_path or None)}. Runs every missing (system, k, question), saving each answer
-    as it finishes; up to `passes` passes so failed calls are retried."""
+    as it finishes; up to `passes` passes so failed calls are retried.
+
+    Progress shows accuracy, not single answers: every `show_every` answers (10 when a NARS system runs, else 100) one
+    line with the running judged accuracy of each model and k still in progress, and one line whenever a model finishes
+    a k (all its saved answers, including earlier sessions). Errors are printed as they happen."""
     guard(results, question_hash)
     judge = deepinfra()
+    show_every = show_every or (10 if any(spec[2] for spec in systems.values()) else 100)
     spent, start = 0.0, time.time()
+    n = len(questions)
     for attempt in range(passes):
-        jobs = [(i, s, k) for s in systems for k in k_values for i in range(len(questions))
-                if i not in load_answers(results, s, k)]
-        total = len(questions) * len(systems) * len(k_values)
-        print(f"pass {attempt + 1}: {len(jobs)} answers to run ({total - len(jobs)} of {total} already saved)")
+        saved = {(s, k): load_answers(results, s, k) for s in systems for k in k_values}
+        jobs = [(i, s, k) for s in systems for k in k_values for i in range(n) if i not in saved[s, k]]
+        total = n * len(systems) * len(k_values)
+        print(f"pass {attempt + 1}: {len(jobs)} answers to run ({total - len(jobs)} of {total} already saved: "
+              f"{n} questions × {len(systems)} systems × k = {', '.join(map(str, k_values))})")
         if not jobs:
             break
+        right = {key: sum(r["judge"] for r in answers.values()) for key, answers in saved.items()}
+        count = {key: len(answers) for key, answers in saved.items()}
+        left = {key: n - count[key] for key in saved}
         with ThreadPoolExecutor(workers) as pool:
             futures = {}
             for i, s, k in jobs:
@@ -262,12 +272,24 @@ def run_all(questions, question_hash, results, systems, k_values, workers=16, pa
                         with open(path, "a") as f:
                             f.write(json.dumps(item, ensure_ascii=False, default=str) + "\n")
                 spent += record["cost"] + record.get("judge_cost", 0.0)
-                if record["kind"] == "nars" or record["error"] or done % show_every == 0 or done == len(jobs):
-                    mark = "!" if record["error"] else "✓" if record["judge"] else "✗"
-                    print(f"[{done:>5}/{len(jobs)}] k={k:<2} {system:<20} {mark} {str(record.get('answer') or '-')[:26]:<26} "
-                          f"gold {record['gold'][:22]:<22} ${spent:.2f}  {(time.time() - start) / 60:.0f} min")
-    missing = sum(1 for s in systems for k in k_values for i in range(len(questions)) if i not in load_answers(results, s, k))
-    print(f"done: ${spent:.2f} this session" + (f" · {missing} answers still failing: run again" if missing else ""))
+                clock = f"${spent:.2f} · {(time.time() - start) / 60:.0f} min"
+                key = (system, k)
+                left[key] -= 1
+                if record["error"]:
+                    print(f"   ! {system} k={k} question {record['index']}: {record['error'][:90]} (retried next pass)")
+                else:
+                    right[key] += record["judge"]
+                    count[key] += 1
+                if left[key] == 0:
+                    print(f"✔ {system:<20} k={k:<2} finished: {100 * right[key] / max(count[key], 1):5.1f}% judged correct "
+                          f"({right[key]}/{count[key]})   [{done}/{len(jobs)} · {clock}]")
+                elif done % show_every == 0:
+                    running = [f"{s} k={kk}: {100 * right[s, kk] / count[s, kk]:.0f}% of {count[s, kk]}"
+                               for (s, kk) in saved if 0 < left[s, kk] < n - len(saved[s, kk])]   # started, not finished
+                    print(f"[{done:>5}/{len(jobs)}] {clock} · running accuracy: " + (" · ".join(running[:4]) or "-"))
+    missing = sum(1 for s in systems for k in k_values for i in range(n) if i not in load_answers(results, s, k))
+    print(f"done: ${spent:.2f} this session" + (f" · {missing} answers still failing: run this cell again" if missing
+                                               else " · every answer saved: run the report cell"))
 
 
 # ── Report and chart ────────────────────────────────────────────────────────────────────────────────────────────────
