@@ -156,7 +156,7 @@ def extract_facts(llm, records):
     """Fill record["supporting"][i]["facts"]. Each unique paragraph is sent once. Returns paragraphs with no facts."""
     unique = list({p["text"]: p for r in records for p in r["supporting"]}.values())
     replies = llm.ask_all([EXTRACT.format(title=p["title"], text=p["text"]) for p in unique],
-                          max_tokens=384, desc="Extracting facts")
+                          max_tokens=1024, desc="Extracting facts")
     facts_of = {p["text"]: parse_facts(reply or "") for p, reply in zip(unique, replies)}
     for r in records:
         for p in r["supporting"]:
@@ -217,7 +217,7 @@ def add_distractors(llm, dataset, name, hops, sample, seed):
     todo = [questions[i] for i in picked if "context" not in questions[i]]
     unique = list({p["text"]: p for q in todo for p in q["paragraphs"] if not p["is_supporting"]}.values())
     replies = llm.ask_all([EXTRACT.format(title=p["title"], text=p["text"]) for p in unique],
-                          max_tokens=384, desc="Extracting distractor facts")
+                          max_tokens=1024, desc="Extracting distractor facts")
     facts_of = {p["text"]: parse_facts(reply or "") for p, reply in zip(unique, replies)}
     for q in todo:
         facts_of.update({p["text"]: p["facts"] for p in q["supporting"]})

@@ -80,7 +80,7 @@ def build(dataset, n_questions=200, k_max=16, out="questions.pkl", seed=0, batch
 
     def extract(paragraph_list):
         replies = llm.ask_all([EXTRACT.format(title=p["title"], text=p["text"]) for p in paragraph_list],
-                              max_tokens=384, desc="Extracting facts")
+                              max_tokens=1024, desc="Extracting facts")   # 384 cut long paragraphs mid-sentence
         return [parse_facts(reply or "") for reply in replies]
 
     def screen(candidates, need, counts, taken):

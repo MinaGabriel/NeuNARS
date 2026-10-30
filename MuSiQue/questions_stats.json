@@ -25,5 +25,6 @@
     "input_tokens": 1283324,
     "output_tokens": 681065,
     "cost_usd": 0.7858
-  }
+  },
+  "refacts": "2026-10-30: 396 long paragraphs re-extracted with max_tokens=1024 (384 cut 80 mid-sentence); 6 questions keep a gold answer absent from the facts: indices 2, 14, 90, 128, 182, 191"
 }
