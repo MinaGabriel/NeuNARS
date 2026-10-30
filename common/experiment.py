@@ -33,14 +33,13 @@ K_VALUES = {"MuSiQue": [0, 4, 8, 16], "HotpotQA": [0, 4, 8], "2Wiki": [0, 4, 8]}
 BASELINES = {                                   # LLMs answering directly from the facts (all on DeepInfra)
     "gemma-3-4b": "google/gemma-3-4b-it",
     "gemma-3-12b": "google/gemma-3-12b-it",
-    "phi-4": "microsoft/phi-4",
     "Mistral-Small-24B": "mistralai/Mistral-Small-3.2-24B-Instruct-2506",
     "gemma-3-27b": "google/gemma-3-27b-it",
     "Llama-3.3-70B": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
     "Qwen3-Next-80B-A3B": "Qwen/Qwen3-Next-80B-A3B-Instruct",
     "DeepSeek-V3": "deepseek-ai/DeepSeek-V3",
 }
-SIZES = {"gemma-3-4b": "4B", "gemma-3-12b": "12B", "phi-4": "14B", "Mistral-Small-24B": "24B", "gemma-3-27b": "27B",
+SIZES = {"gemma-3-4b": "4B", "gemma-3-12b": "12B", "Mistral-Small-24B": "24B", "gemma-3-27b": "27B",
          "Llama-3.3-70B": "70B", "Qwen3-Next-80B-A3B": "80B (3B active)", "DeepSeek-V3": "671B (37B active)",
          "Llama-3.1-8B": "8B", "NARS + 8B + LoRA": "8B", "NARS + DeepSeek-V3": "671B (37B active)"}
 REFERENCE = "Llama-3.1-8B"                      # the student's own weights answering directly (run_nars_lora.ipynb)
