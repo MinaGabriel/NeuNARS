@@ -248,7 +248,10 @@ def run_all(questions, question_hash, results, systems, k_values, workers=16, pa
         if not jobs:
             break
         with ThreadPoolExecutor(workers) as pool:
-            futures = {pool.submit(run_one, questions[i], i, k, s, *systems[s], judge): (s, k) for i, s, k in jobs}
+            futures = {}
+            for i, s, k in jobs:
+                client, model, ona_path = systems[s]
+                futures[pool.submit(run_one, questions[i], i, k, s, client, model, judge, ona_path=ona_path)] = (s, k)
             for done, future in enumerate(as_completed(futures), 1):
                 system, k = futures[future]
                 record, trace = future.result()
