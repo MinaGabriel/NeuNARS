@@ -41,9 +41,9 @@ BASELINES = {                                   # LLMs answering directly from t
 }
 SIZES = {"gemma-3-4b": "4B", "gemma-3-12b": "12B", "Mistral-Small-24B": "24B", "gemma-3-27b": "27B",
          "Llama-3.3-70B": "70B", "Qwen3-Next-80B-A3B": "80B (3B active)", "DeepSeek-V3": "671B (37B active)",
-         "Llama-3.1-8B": "8B", "NARS + 8B + LoRA": "8B", "NARS + DeepSeek-V3": "671B (37B active)"}
+         "Llama-3.1-8B": "8B", "NARS + 8B + LoRA": "8B"}
 REFERENCE = "Llama-3.1-8B"                      # the student's own weights answering directly (run_nars_lora.ipynb)
-NARS_SYSTEMS = {"NARS + 8B + LoRA", "NARS + DeepSeek-V3"}
+NARS_SYSTEMS = {"NARS + 8B + LoRA"}
 ONA_OPTIONS = {"plan": True, "votes": 3, "merge_relations": True}
 ONA_COMMIT = "dc4efd0abd520cdb79bf53bfa3c285ebb24f2e8a"
 ADAPTER_REPO = "MinaGabriel/nars-llama31-8b-lora"
@@ -325,7 +325,7 @@ def report(results, dataset, n_questions=None):
     for metric in ("exact", "lenient", "judge"):
         df[metric] = df[metric].astype(int)
     k_values = sorted(df.k.unique())
-    order = [s for s in [*BASELINES, REFERENCE, "NARS + DeepSeek-V3", "NARS + 8B + LoRA"] if s in set(df.system)]
+    order = [s for s in [*BASELINES, REFERENCE, "NARS + 8B + LoRA"] if s in set(df.system)]
     order += sorted(set(df.system) - set(order))
     lines = [f"{dataset.upper()} · {df['index'].nunique()} questions · {len(df)} answers · k = {', '.join(map(str, k_values))}", ""]
 
