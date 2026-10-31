@@ -41,9 +41,9 @@ BASELINES = {                                   # LLMs answering directly from t
 }
 SIZES = {"gemma-3-4b": "4B", "gemma-3-12b": "12B", "Mistral-Small-24B": "24B", "gemma-3-27b": "27B",
          "Llama-3.3-70B": "70B", "Qwen3-Next-80B-A3B": "80B (3B active)", "DeepSeek-V3": "671B (37B active)",
-         "Llama-3.1-8B": "8B", "NARS + 8B + LoRA": "8B", "Prolog + 8B + LoRA": "8B"}
+         "Llama-3.1-8B": "8B", "NARS + 8B + LoRA": "8B", "NARS + 8B + LoRA v2": "8B", "Prolog + 8B + LoRA": "8B"}
 REFERENCE = "Llama-3.1-8B"                      # the student's own weights answering directly (run_nars_lora.ipynb)
-NARS_SYSTEMS = {"NARS + 8B + LoRA"}
+NARS_SYSTEMS = {"NARS + 8B + LoRA", "NARS + 8B + LoRA v2"}
 ONA_OPTIONS = {"plan": True, "votes": 3, "merge_relations": True}
 ONA_COMMIT = "dc4efd0abd520cdb79bf53bfa3c285ebb24f2e8a"
 ADAPTER_REPO = "MinaGabriel/nars-llama31-8b-lora"
@@ -348,9 +348,32 @@ def glob_answers(results):
     return [f"{base}/{d}/{f}" for d in os.listdir(base) for f in os.listdir(f"{base}/{d}") if f.endswith(".jsonl")]
 
 
-def report(results, dataset, n_questions=None):
+def with_fallback(df):
+    """Adds "<NARS system> + fallback" rows built from saved answers: the NARS answer when NARS derived one, else the
+    8B reference's direct answer to the same question at the same k. Fallback answers are not traceable to a derivation,
+    so these rows are reported next to pure NARS, never instead of it."""
+    import pandas as pd
+
+    if REFERENCE not in set(df.system):
+        return df
+    ref = df[df.system == REFERENCE].set_index(["index", "k"])[["answer", "exact", "lenient", "judge", "cost"]]
+    extra = []
+    for s in sorted(set(df[df.kind == "nars"].system)):
+        part = df[df.system == s].merge(ref, left_on=["index", "k"], right_index=True, suffixes=("", "_ref"))
+        none = part.answer.isna()
+        for column in ("answer", "exact", "lenient", "judge"):
+            part.loc[none, column] = part.loc[none, f"{column}_ref"]
+        part.loc[none, "cost"] += part.loc[none, "cost_ref"]
+        name = f"{s} + fallback"
+        SIZES.setdefault(name, SIZES.get(s, "?"))
+        extra.append(part.drop(columns=[c for c in part if c.endswith("_ref")]).assign(system=name, kind="fallback"))
+    return pd.concat([df, *extra], ignore_index=True) if extra else df
+
+
+def report(results, dataset, n_questions=None, fallback=True):
     """Tables (judge and exact per k), robustness vs the 8B reference when it is present, NARS failure rates, cost, and
-    a chart of accuracy vs k. Reads whatever has been saved, so it works mid-run; writes report.txt and accuracy_vs_k.png."""
+    a chart of accuracy vs k. Reads whatever has been saved, so it works mid-run; writes report.txt and accuracy_vs_k.png.
+    fallback: also report each NARS system with the 8B's direct answer where NARS derived none (see with_fallback)."""
     import matplotlib.pyplot as plt
     import pandas as pd
     from prettytable import PrettyTable
@@ -364,6 +387,8 @@ def report(results, dataset, n_questions=None):
         df = df[df["index"] < n_questions]
     for metric in ("exact", "lenient", "judge"):
         df[metric] = df[metric].astype(int)
+    if fallback:
+        df = with_fallback(df)
     k_values = sorted(df.k.unique())
     order = [s for s in [*BASELINES, REFERENCE, "NARS + 8B + LoRA"] if s in set(df.system)]
     order += sorted(set(df.system) - set(order))
@@ -381,20 +406,22 @@ def report(results, dataset, n_questions=None):
 
     if REFERENCE in set(df.system) and len(k_values) > 1:
         first, last = k_values[0], k_values[-1]
-        table = PrettyTable(["System", f"loses less than {REFERENCE} (judge, k {first}→{last})", "95% CI", "n"])
-        table.align["System"] = "l"
-        for s in order:
-            if s == REFERENCE:
-                continue
-            w = df[df.system.isin([s, REFERENCE]) & df.k.isin([first, last])].pivot_table(
-                index="index", columns=["system", "k"], values="judge").dropna()
-            if w.empty or s not in w.columns.get_level_values(0):
-                continue
-            diff = ((w[s][last] - w[s][first]) - (w[REFERENCE][last] - w[REFERENCE][first])).to_numpy()
-            rng = random.Random(0)
-            boots = sorted(sum(rng.choice(diff) for _ in diff) / len(diff) for _ in range(2000))
-            table.add_row([s, f"{100 * diff.mean():+.1f} points", f"[{100 * boots[50]:+.1f}, {100 * boots[1949]:+.1f}]", len(diff)])
-        lines += ["ROBUSTNESS (paired per question; positive = loses less accuracy than the 8B)", str(table), ""]
+        for metric in ("judge", "exact"):
+            table = PrettyTable(["System", f"loses less than {REFERENCE} ({metric}, k {first}→{last})", "95% CI", "n"])
+            table.align["System"] = "l"
+            for s in order:
+                if s == REFERENCE:
+                    continue
+                w = df[df.system.isin([s, REFERENCE]) & df.k.isin([first, last])].pivot_table(
+                    index="index", columns=["system", "k"], values=metric).dropna()
+                if w.empty or s not in w.columns.get_level_values(0):
+                    continue
+                diff = ((w[s][last] - w[s][first]) - (w[REFERENCE][last] - w[REFERENCE][first])).to_numpy()
+                rng = random.Random(0)
+                boots = sorted(sum(rng.choice(diff) for _ in diff) / len(diff) for _ in range(2000))
+                table.add_row([s, f"{100 * diff.mean():+.1f} points", f"[{100 * boots[50]:+.1f}, {100 * boots[1949]:+.1f}]",
+                               len(diff)])
+            lines += [f"ROBUSTNESS · {metric} (paired per question; positive = loses less accuracy than the 8B)", str(table), ""]
 
     nars = df[df.kind == "nars"]
     if not nars.empty:
