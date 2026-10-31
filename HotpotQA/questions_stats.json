@@ -1,0 +1,23 @@
+{
+  "validation": {
+    "screened": 800,
+    "unknown": 311,
+    "answerable": 250,
+    "selected": 210,
+    "complete": 200
+  },
+  "dataset": "HotpotQA",
+  "questions": 200,
+  "k_max": 8,
+  "by_source": {
+    "validation": 200
+  },
+  "api": {
+    "model": "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
+    "requests": 3760,
+    "failed": 0,
+    "input_tokens": 668530,
+    "output_tokens": 406755,
+    "cost_usd": 0.4301
+  }
+}
