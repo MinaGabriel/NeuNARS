@@ -233,18 +233,19 @@ def guard(results, question_hash):
         open(path, "w").write(question_hash)
 
 
-def run_all(questions, question_hash, results, systems, k_values, workers=16, passes=3, show_every=None):
+def run_all(questions, question_hash, results, systems, k_values, workers=16, passes=3):
     """systems: {name: (client, model, ona_path or None)}. Runs every missing (system, k, question), saving each answer
     as it finishes; up to `passes` passes so failed calls are retried.
 
-    Progress shows accuracy, not single answers: every `show_every` answers (10 when a NARS system runs, else 100) one
-    line with the running judged accuracy of each model and k still in progress, and one line whenever a model finishes
-    a k (all its saved answers, including earlier sessions). Errors are printed as they happen."""
+    A progress bar shows answers done, time left, money spent this session (systems + judge), errors, and the running
+    judged accuracy of each system (all its saved answers at these k, earlier sessions included). Errors and finished
+    (system, k) pairs are printed above the bar."""
+    from tqdm.auto import tqdm
+
     guard(results, question_hash)
     judge = deepinfra()
-    show_every = show_every or (10 if any(spec[2] for spec in systems.values()) else 100)
-    spent, start = 0.0, time.time()
-    n = len(questions)
+    spent = {"systems": 0.0, "judge": 0.0}
+    n, errors = len(questions), 0
     for attempt in range(passes):
         saved = {(s, k): load_answers(results, s, k) for s in systems for k in k_values}
         jobs = [(i, s, k) for s in systems for k in k_values for i in range(n) if i not in saved[s, k]]
@@ -256,12 +257,13 @@ def run_all(questions, question_hash, results, systems, k_values, workers=16, pa
         right = {key: sum(r["judge"] for r in answers.values()) for key, answers in saved.items()}
         count = {key: len(answers) for key, answers in saved.items()}
         left = {key: n - count[key] for key in saved}
-        with ThreadPoolExecutor(workers) as pool:
+        with ThreadPoolExecutor(workers) as pool, tqdm(total=len(jobs), desc=f"pass {attempt + 1}", unit="answer",
+                                                      dynamic_ncols=True) as bar:
             futures = {}
             for i, s, k in jobs:
                 client, model, ona_path = systems[s]
                 futures[pool.submit(run_one, questions[i], i, k, s, client, model, judge, ona_path=ona_path)] = (s, k)
-            for done, future in enumerate(as_completed(futures), 1):
+            for future in as_completed(futures):
                 system, k = futures[future]
                 record, trace = future.result()
                 for folder, item in (("answers", record), ("traces", trace)):
@@ -270,25 +272,63 @@ def run_all(questions, question_hash, results, systems, k_values, workers=16, pa
                         os.makedirs(os.path.dirname(path), exist_ok=True)
                         with open(path, "a") as f:
                             f.write(json.dumps(item, ensure_ascii=False, default=str) + "\n")
-                spent += record["cost"] + record.get("judge_cost", 0.0)
-                clock = f"${spent:.2f} · {(time.time() - start) / 60:.0f} min"
+                spent["systems"] += record["cost"]
+                spent["judge"] += record.get("judge_cost", 0.0)
                 key = (system, k)
                 left[key] -= 1
                 if record["error"]:
-                    print(f"   ! {system} k={k} question {record['index']}: {record['error'][:90]} (retried next pass)")
+                    errors += 1
+                    bar.write(f"   ! {system} k={k} question {record['index']}: {record['error'][:90]} (retried next pass)")
                 else:
                     right[key] += record["judge"]
                     count[key] += 1
                 if left[key] == 0:
-                    print(f"✔ {system:<20} k={k:<2} finished: {100 * right[key] / max(count[key], 1):5.1f}% judged correct "
-                          f"({right[key]}/{count[key]})   [{done}/{len(jobs)} · {clock}]")
-                elif done % show_every == 0:
-                    running = [f"{s} k={kk}: {100 * right[s, kk] / count[s, kk]:.0f}% of {count[s, kk]}"
-                               for (s, kk) in saved if 0 < left[s, kk] < n - len(saved[s, kk])]   # started, not finished
-                    print(f"[{done:>5}/{len(jobs)}] {clock} · running accuracy: " + (" · ".join(running[:4]) or "-"))
+                    bar.write(f"✔ {system:<22} k={k:<2} finished: {100 * right[key] / max(count[key], 1):5.1f}% judged "
+                              f"correct ({right[key]}/{count[key]})")
+                accuracy = {}
+                for s in systems:
+                    r, c = sum(right[s, kk] for kk in k_values), sum(count[s, kk] for kk in k_values)
+                    if c:
+                        accuracy[s[:24]] = f"{100 * r / c:.0f}% of {c}"
+                bar.set_postfix({"$": f"{sum(spent.values()):.2f}", "errors": errors, **accuracy}, refresh=False)
+                bar.update()
     missing = sum(1 for s in systems for k in k_values for i in range(n) if i not in load_answers(results, s, k))
-    print(f"done: ${spent:.2f} this session" + (f" · {missing} answers still failing: run this cell again" if missing
-                                               else " · every answer saved: run the report cell"))
+    print(f"done: ${sum(spent.values()):.2f} this session (systems ${spent['systems']:.2f}, judge ${spent['judge']:.2f})"
+          + (f" · {missing} answers still failing: run this cell again" if missing else " · every answer saved"))
+
+
+def compare_k(results, names, k, n_questions=None):
+    """One k, for the systems in `names` (saved answers, earlier sessions included): each system's judged and exact
+    accuracy, no-answer rate, cost and time, then every system against the first one question by question."""
+    from prettytable import PrettyTable
+
+    answers = {s: {i: r for i, r in load_answers(results, s, k).items() if n_questions is None or i < n_questions}
+               for s in dict.fromkeys(names)}
+    table = PrettyTable(["System", "judge %", "exact %", "no answer", "answers", "cost $", "s / answer"])
+    table.align["System"] = "l"
+    for s, rows in answers.items():
+        r = list(rows.values())
+        if not r:                               # nothing saved for this system at this k
+            continue
+        table.add_row([s, f"{100 * sum(x['judge'] for x in r) / len(r):.1f}", f"{100 * sum(x['exact'] for x in r) / len(r):.1f}",
+                       f"{100 * sum(x['answer'] is None for x in r) / len(r):.0f}%", len(r),
+                       f"{sum(x['cost'] + x.get('judge_cost', 0.0) for x in r):.3f}",
+                       f"{sum(x['seconds'] for x in r) / len(r):.1f}"])
+    present = [s for s in answers if answers[s]]
+    if not present:
+        print(f"k = {k}: no answers saved yet")
+        return
+    print(f"k = {k}\n{table}")
+    first, *others = present
+    for s in others:
+        both = set(answers[first]) & set(answers[s])
+        if not both:
+            continue
+        a = {i: answers[first][i]["judge"] for i in both}
+        b = {i: answers[s][i]["judge"] for i in both}
+        print(f"{s} vs {first} on {len(both)} questions: both right {sum(a[i] and b[i] for i in both)} · "
+              f"only {s} {sum(b[i] and not a[i] for i in both)} · only {first} {sum(a[i] and not b[i] for i in both)} · "
+              f"neither {sum(not a[i] and not b[i] for i in both)}")
 
 
 # ── Report and chart ────────────────────────────────────────────────────────────────────────────────────────────────
