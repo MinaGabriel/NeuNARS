@@ -149,6 +149,7 @@ def examples(sample, rules_copies):
     else:
         skipped["rules not from question"] += 1
     return [{"id": sample["id"], "dataset": sample["dataset"], "task": task,
+             "teacher": sample["models"]["nars"], "distractors": sample.get("distractors", 2),
              "messages": [{"role": "user", "content": prompt}, {"role": "assistant", "content": reply}]}
             for task, prompt, reply in rows], skipped
 

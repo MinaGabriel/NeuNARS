@@ -14,7 +14,7 @@
 #   3. evidence      the 70B answers from the supporting paragraphs; a question it gets wrong is dropped
 #   4. facts         the 70B lists the facts of the 2 supporting + --distractors (default 2) distractor paragraphs,
 #                    in shuffled order; each sample records how many it had ("distractors")
-#   5. NARS          ONA.py (hop plan, 3 votes, merged relations) with DeepSeek-V3 as the rule writer (the teacher)
+#   5. NARS          ONA.py (hop plan, 3 votes, merged relations) with NARS_MODEL as the rule writer (the teacher)
 #   6. keep          only if NARS's answer is an EXACT match of a gold answer
 #
 # Output in data/train/<dataset>/:
@@ -51,7 +51,9 @@ from llm import MODEL as FILTER_MODEL
 from pipeline import CLOSED_BOOK, EVIDENCE, EXTRACT, JUDGE, TIME_SENSITIVE, is_correct, parse_facts, removal_reason
 
 ROOT = Path(__file__).resolve().parent.parent   # the repository: data/train/ lives there
-NARS_MODEL = "deepseek-ai/DeepSeek-V3"  # the teacher: the rule writer of the NARS reported on the test sets
+# The teacher (rule writer). DeepSeek-V3 wrote every k = 2 and k = 4 sample; from 31 Oct 2026 it ran at about 1 token/s on
+# DeepInfra, so the k >= 8 samples use Llama-3.3-70B. Each sample records its teacher in "models".
+NARS_MODEL = "meta-llama/Llama-3.3-70B-Instruct-Turbo"
 ONA_OPTIONS = {"plan": True, "votes": 3, "merge_relations": True}
 ONA_PATH = "/Users/mina/Developer/OpenNARS-for-Applications/NAR"
 MODULES = {"MuSiQue": "MuSiQue", "HotpotQA": "HotpotQA", "2Wiki": "TwoWiki"}
@@ -254,7 +256,7 @@ def process(q):
         "question": q["question"], "answer": q["answer"], "gold_answers": golds, "hops": q["hops"],
         "type": q.get("type"), "decomposition": q.get("decomposition"),
         "paragraphs": paragraphs,  # in the order NARS read them: 2 supporting + DISTRACTORS distractors
-        "distractors": DISTRACTORS,
+        "distractors": len(q["shown"]) - 2,  # the number actually shown: fewer than --distractors if the question has fewer
         "filters": {"closed_book": closed_book, "evidence": evidence},
         "nars": {
             "answer": nars_answer, "votes": [s["answer"] for s in ona.samples], "plan": ona.plan_text,
