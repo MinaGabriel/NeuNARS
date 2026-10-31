@@ -41,7 +41,8 @@ BASELINES = {                                   # LLMs answering directly from t
 }
 SIZES = {"gemma-3-4b": "4B", "gemma-3-12b": "12B", "Mistral-Small-24B": "24B", "gemma-3-27b": "27B",
          "Llama-3.3-70B": "70B", "Qwen3-Next-80B-A3B": "80B (3B active)", "DeepSeek-V3": "671B (37B active)",
-         "Llama-3.1-8B": "8B", "NARS + 8B + LoRA": "8B", "NARS + 8B + LoRA v2": "8B", "Prolog + 8B + LoRA": "8B"}
+         "Llama-3.1-8B": "8B", "Llama-3.1-8B + CoT": "8B", "NARS + 8B + LoRA": "8B", "NARS + 8B + LoRA v2": "8B",
+         "Prolog + 8B + LoRA": "8B"}
 REFERENCE = "Llama-3.1-8B"                      # the student's own weights answering directly (run_nars_lora.ipynb)
 NARS_SYSTEMS = {"NARS + 8B + LoRA", "NARS + 8B + LoRA v2"}
 ONA_OPTIONS = {"plan": True, "votes": 3, "merge_relations": True}
@@ -130,6 +131,18 @@ Facts:
 Question: {question}
 Answer:"""
 
+COT = "cot"                                     # third element of a system spec: the LLM reasons step by step, then answers
+COT_PROMPT = """Answer the question using only the facts below. Think step by step: find the facts that answer each part
+of the question and connect them, then give the final answer.
+
+Facts:
+{facts}
+
+Question: {question}
+
+Write your reasoning, then end with one last line of the form "Answer: <short answer>"."""
+COT_ANSWER = re.compile(r"^\W*answer\W*:\s*(.+)$", re.I | re.M)
+
 JUDGE_PROMPT = """You grade one answer to a question against the gold answer. Be strict and consistent.
 
 Question: {question}
@@ -163,21 +176,29 @@ def metrics(judge_client, q, answer):
 
 # ── One answer ──────────────────────────────────────────────────────────────────────────────────────────────────────
 def run_one(q, index, k, system, client, model, judge_client, ona_path=None):
-    """Returns (answer record, trace or None). spec: direct when ona_path is None, else NARS with that ONA binary."""
+    """Returns (answer record, trace or None). ona_path: None = direct answer, COT = step-by-step reasoning then the
+    answer, else NARS with that ONA binary."""
     read = paragraphs_at(q, k)
+    kind = "direct" if ona_path is None else "cot" if ona_path == COT else "nars"
     record = {"index": index, "id": q["id"], "source": q.get("source_split"), "question": q["question"], "gold": q["answer"],
-              "golds": golds(q), "k": k, "system": system, "kind": "nars" if ona_path else "direct", "model": model,
+              "golds": golds(q), "k": k, "system": system, "kind": kind, "model": model,
               "paragraphs": [{"title": p["title"], "supporting": p["is_supporting"], "rank": p["rank"]} for p in read],
               "facts_read": sum(len(p["facts"]) for p in read), "error": None, "cost": 0.0,
               "started": datetime.now(timezone.utc).isoformat()}
     trace, start = None, time.time()
     try:
-        if ona_path is None:
-            prompt = DIRECT_PROMPT.format(facts="\n".join(f"- {f}" for p in facts(q, k) for f in p), question=q["question"])
-            response = client.chat.completions.create(model=model, temperature=0, max_tokens=64,
+        if kind in ("direct", "cot"):
+            template = COT_PROMPT if kind == "cot" else DIRECT_PROMPT
+            prompt = template.format(facts="\n".join(f"- {f}" for p in facts(q, k) for f in p), question=q["question"])
+            response = client.chat.completions.create(model=model, temperature=0, max_tokens=768 if kind == "cot" else 64,
                                                       messages=[{"role": "user", "content": prompt}])
             raw = response.choices[0].message.content or ""
-            record.update(served_model=response.model, raw_reply=raw, answer=raw.strip().split("\n")[0] or None,
+            if kind == "cot":                   # the last "Answer: ..." line; none (e.g. cut off) = no answer
+                found = COT_ANSWER.findall(raw)
+                answer = found[-1].strip().strip("*").strip() if found else None
+            else:
+                answer = raw.strip().split("\n")[0]
+            record.update(served_model=response.model, raw_reply=raw, answer=answer or None,
                           finish_reason=response.choices[0].finish_reason,
                           prompt_sha256=hashlib.sha256(prompt.encode()).hexdigest(),
                           input_tokens=response.usage.prompt_tokens, output_tokens=response.usage.completion_tokens,
@@ -234,7 +255,7 @@ def guard(results, question_hash):
 
 
 def run_all(questions, question_hash, results, systems, k_values, workers=16, passes=3):
-    """systems: {name: (client, model, ona_path or None)}. Runs every missing (system, k, question), saving each answer
+    """systems: {name: (client, model, ona_path, or None for a direct answer, or COT)}. Runs every missing (system, k, question), saving each answer
     as it finishes; up to `passes` passes so failed calls are retried.
 
     A progress bar shows answers done, time left, money spent this session (systems + judge), errors, and the running
@@ -423,14 +444,14 @@ def report(results, dataset, n_questions=None, fallback=True):
                                len(diff)])
             lines += [f"ROBUSTNESS · {metric} (paired per question; positive = loses less accuracy than the 8B)", str(table), ""]
 
-    nars = df[df.kind == "nars"]
+    nars = df[df.kind.isin(["nars", "cot"])]    # CoT gives no answer when its reasoning never reaches an "Answer:" line
     if not nars.empty:
-        table = PrettyTable(["NARS system", *[f"no answer k={k}" for k in k_values]])
+        table = PrettyTable(["NARS / CoT system", *[f"no answer k={k}" for k in k_values]])
         for s in sorted(set(nars.system)):
             part = nars[nars.system == s]
             table.add_row([s, *[f"{part[part.k == k].answer.isna().mean() * 100:.0f}%" if (part.k == k).any() else "-"
                                 for k in k_values]])
-        lines += ["NARS: share of questions with no derived answer", str(table), ""]
+        lines += ["NARS / CoT: share of questions with no answer", str(table), ""]
 
     if "source" in df and df.source.nunique() > 1:
         lines.append("BY SOURCE SPLIT (judge accuracy per k)")
@@ -455,7 +476,7 @@ def report(results, dataset, n_questions=None, fallback=True):
             acc = [100 * part[part.k == k][metric].mean() for k in ks]
             n = [len(part[part.k == k]) for k in ks]
             err = [196 * math.sqrt(a / 100 * (1 - a / 100) / m) for a, m in zip(acc, n)]
-            strong = s in NARS_SYSTEMS or s == REFERENCE
+            strong = s in NARS_SYSTEMS or s in (REFERENCE, f"{REFERENCE} + CoT")
             ax.errorbar(ks, acc, yerr=err if strong else None, marker="o", capsize=3, color=palette(i % 10),
                         linewidth=2.6 if s in NARS_SYSTEMS else 1.3, linestyle="-" if strong else "--",
                         markersize=6 if strong else 4, label=f"{s} ({SIZES.get(s, '?')})")
