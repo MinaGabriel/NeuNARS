@@ -12,6 +12,8 @@ Truncated replies are dropped. JSON targets are bare JSON, one item per line.
     python make_sft.py                         # MuSiQue + HotpotQA (2Wiki held out)
     python make_sft.py --datasets MuSiQue HotpotQA 2Wiki
     python make_sft.py --rules-copies 1        # no upsampling of the rules examples
+    python make_sft.py --teachers deepseek llama   # also the Llama-3.3-70B samples (adapter v3; it hurt)
+    python make_sft.py --max-distractors 4 --out data/sft_v5   # adapter v5: v4's data without the k=8 samples
 
 Writes data/sft/train.jsonl and data/sft/val.jsonl, split by question (no question in both). The split hashes the
 question id, so a question stays on the same side when more samples are generated later.
@@ -28,7 +30,7 @@ ROOT = Path(__file__).resolve().parent.parent   # the repository: data/ lives th
 sys.path.insert(0, str(ROOT / "common"))
 
 from ONA import OnaReasoner, atom, is_var, missing_terms, plausible_alias
-from train_data import from_question
+from train_data import TEACHERS, from_question
 
 TASKS = {"Convert the facts below": "triples", "Group the names below": "aliases",
          "Break the question into hops": "plan", "Write rules that answer": "rules"}
@@ -160,14 +162,29 @@ def main():
     parser.add_argument("--rules-copies", type=int, default=2,
                         help="copies of each rules example in train: rules are the hardest job and the fewest tokens")
     parser.add_argument("--val", type=float, default=0.1, help="share of questions held out for validation")
+    parser.add_argument("--teachers", nargs="+", choices=TEACHERS, default=["deepseek"],
+                        help="whose samples to use (default DeepSeek-V3 only: the Llama-3.3-70B samples made v3 worse)")
+    parser.add_argument("--max-distractors", type=int,
+                        help="leave out samples with more distractors than this (v5: 4, to test whether k=8 hurt v4)")
+    parser.add_argument("--out", default="data/sft", help="output folder, relative to the repository")
     args = parser.parse_args()
 
     samples = [json.loads(line) for dataset in args.datasets
                for line in open(ROOT / "data" / "train" / dataset / f"{dataset}_train.jsonl")]
+    wanted = {TEACHERS[t] for t in args.teachers}
+    left_out = collections.Counter(s["models"]["nars"].split("/")[-1] for s in samples if s["models"]["nars"] not in wanted)
+    samples = [s for s in samples if s["models"]["nars"] in wanted]
+    if args.max_distractors is not None:
+        too_many = collections.Counter(s.get("distractors", 2) for s in samples if s.get("distractors", 2) > args.max_distractors)
+        samples = [s for s in samples if s.get("distractors", 2) <= args.max_distractors]
+        print(f"left out by --max-distractors {args.max_distractors}: {dict(sorted(too_many.items()))}")
+    print(f"{len(samples)} samples by {', '.join(args.teachers)} · by distractors: "
+          f"{dict(sorted(collections.Counter(s.get('distractors', 2) for s in samples).items()))}"
+          + (f" · left out {dict(left_out)}" if left_out else ""))
     is_val = lambda sample: int(hashlib.md5(sample["id"].encode()).hexdigest(), 16) % 1000 < args.val * 1000
     splits = {"val": [s for s in samples if is_val(s)], "train": [s for s in samples if not is_val(s)]}
 
-    out = ROOT / "data" / "sft"
+    out = ROOT / args.out
     out.mkdir(parents=True, exist_ok=True)
     for name, group in splits.items():
         rows, skipped = [], collections.Counter()

@@ -51,9 +51,11 @@ from llm import MODEL as FILTER_MODEL
 from pipeline import CLOSED_BOOK, EVIDENCE, EXTRACT, JUDGE, TIME_SENSITIVE, is_correct, parse_facts, removal_reason
 
 ROOT = Path(__file__).resolve().parent.parent   # the repository: data/train/ lives there
-# The teacher (rule writer). DeepSeek-V3 wrote every k = 2 and k = 4 sample; from 31 Oct 2026 it ran at about 1 token/s on
-# DeepInfra, so the k >= 8 samples use Llama-3.3-70B. Each sample records its teacher in "models".
-NARS_MODEL = "meta-llama/Llama-3.3-70B-Instruct-Turbo"
+# The teacher (rule writer), set by --teacher. DeepSeek-V3 wrote every k = 2 and k = 4 sample and is the default; the
+# Llama-3.3-70B samples (k = 4 and 8, written while DeepSeek-V3 was slow on DeepInfra) made adapter v3 worse, so
+# make_sft.py leaves them out by default. Each sample records its teacher in "models".
+TEACHERS = {"deepseek": "deepseek-ai/DeepSeek-V3", "llama": "meta-llama/Llama-3.3-70B-Instruct-Turbo"}
+NARS_MODEL = TEACHERS["deepseek"]
 ONA_OPTIONS = {"plan": True, "votes": 3, "merge_relations": True}
 ONA_PATH = "/Users/mina/Developer/OpenNARS-for-Applications/NAR"
 MODULES = {"MuSiQue": "MuSiQue", "HotpotQA": "HotpotQA", "2Wiki": "TwoWiki"}
@@ -339,9 +341,10 @@ def main(dataset):
     parser.add_argument("--quiet", action="store_true", help="print only kept samples, not rejections")
     parser.add_argument("--distractors", type=int, default=2,
                         help="distractor paragraphs per question (2 was the first training set; 4 or 8 add noise)")
+    parser.add_argument("--teacher", choices=TEACHERS, default="deepseek", help="the rule writer (default DeepSeek-V3)")
     args = parser.parse_args()
-    global DISTRACTORS
-    DISTRACTORS = args.distractors
+    global DISTRACTORS, NARS_MODEL
+    DISTRACTORS, NARS_MODEL = args.distractors, TEACHERS[args.teacher]
 
     missing = [m for m in (FILTER_MODEL, NARS_MODEL) if m not in PRICES]
     if missing:
@@ -356,7 +359,8 @@ def main(dataset):
     surplus = dedupe(surplus_path, read_jsonl(surplus_path))
     log = read_jsonl(log_path)
     kept_ids = {r["id"] for r in kept}
-    promote = [r for r in surplus if r["id"] not in kept_ids and r.get("distractors", 2) == DISTRACTORS][:max(0, args.n - len(kept))]   # same distractor count only
+    promote = [r for r in surplus if r["id"] not in kept_ids and r.get("distractors", 2) == DISTRACTORS
+               and r["models"]["nars"] == NARS_MODEL][:max(0, args.n - len(kept))]   # same distractors and teacher only
     for r in promote:  # samples paid for in an earlier run go in first
         append(kept_path, r)
         kept_ids.add(r["id"])
@@ -384,7 +388,8 @@ def main(dataset):
         f"prices (live, $/1M in/out): " + " · ".join(f"{m.split('/')[-1]} {PRICES[m][0]:.2f}/{PRICES[m][1]:.2f}"
                                                      for m in (FILTER_MODEL, NARS_MODEL)),
         f"keep: NARS exact match · paragraphs: 2 supporting + {DISTRACTORS} distractors · {args.workers} workers · "
-        f"kept so far by distractors: {dict(Counter(r.get('distractors', 2) for r in kept))}",
+        f"kept so far by distractors and teacher: "
+        f"{dict(Counter((r.get('distractors', 2), r['models']['nars'].split('/')[-1]) for r in kept))}",
         f"output {kept_path.relative_to(ROOT)}",
     ])
     if not todo:
