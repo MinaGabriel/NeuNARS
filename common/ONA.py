@@ -907,7 +907,9 @@ class OnaReasoner:
         """All variable assignments that satisfy every condition at once, without reusing the exact same
         ground fact twice in a single rule AND ensuring distinct variables bind to distinct entities
         (otherwise "?A and ?B both had hits on X" could bind ?A and ?B to the same person). A variable never binds
-        to an entity the rule names itself: "the father of X" is never X."""
+        to an entity the rule names itself: "the father of X" is never X. Bindings come in sorted fact order:
+        candidates break ONA's confidence ties by this order, and a set's order changes with every Python run."""
+        facts = sorted(facts)
         constants = {x for s, _, o in conditions for x in (s, o) if not is_var(x)}
         results = [(dict(), set())]
         for s, r, o in conditions:
