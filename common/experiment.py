@@ -87,6 +87,7 @@ def load_questions(path="questions.pkl", n=None):
     with open(path, "rb") as f:
         data = f.read()
     questions = pickle.loads(data)
+    assert not n or n <= len(questions), f"{path} holds {len(questions)} questions, fewer than {n}: build the rest first"
     return questions[:n] if n else questions, hashlib.sha256(data).hexdigest()
 
 
