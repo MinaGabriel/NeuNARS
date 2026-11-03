@@ -62,11 +62,21 @@ def independent(records, taken):
     return out
 
 
-def build(dataset, n_questions=200, k_max=16, out="questions.pkl", seed=0, batch=400):
+def build(dataset, n_questions=200, k_max=16, out="questions.pkl", seed=0, batch=400, extend=False):
+    """extend=True keeps the questions already in `out` unchanged (same facts, same layout) and adds new ones up to
+    n_questions; the new ones share no id, supporting paragraph or gold answer with the old ones."""
     module = importlib.import_module(MODULES[dataset])
+    ids, texts, tried = exclusions(dataset)
+    old, taken = [], {"texts": set(), "answers": set()}
+    if extend:
+        old = pickle.load(open(out, "rb"))
+        assert all(sum(not p["is_supporting"] for p in q["layout"]) >= k_max for q in old), f"{out} has fewer than {k_max} distractors"
+        ids |= {q["id"] for q in old}
+        independent([{"supporting": [p for p in q["layout"] if p["is_supporting"]], "answer": q["answer"]} for q in old], taken)
+        print(f"Extending {out}: {len(old)} questions kept, {max(n_questions - len(old), 0)} to build")
+        n_questions -= len(old)
     llm = DeepInfra()
     llm.check()
-    ids, texts, tried = exclusions(dataset)
 
     def fresh(split):
         pool = [r for r in module.load_pool(seed, split=split, full=True) if r["hops"] == 2]
@@ -108,7 +118,7 @@ def build(dataset, n_questions=200, k_max=16, out="questions.pkl", seed=0, batch
             counts[key] += value
         return complete
 
-    kept, stats, taken = [], {}, {"texts": set(), "answers": set()}
+    kept, stats = [], {}
     for split in ("validation", "train"):
         if len(kept) >= n_questions:
             break
@@ -133,6 +143,10 @@ def build(dataset, n_questions=200, k_max=16, out="questions.pkl", seed=0, batch
         r["layout"] = sorted(layout, key=lambda p: p["position"])
         r.pop("paragraphs")
 
+    if old:
+        previous = json.load(open(out.replace(".pkl", "_stats.json")))
+        stats["extended_from"] = {"questions": len(old), "stats": previous}
+        kept = old + kept
     assert len({q["id"] for q in kept}) == len(kept)
     assert len({normalize(q["answer"]) for q in kept}) == len(kept), "two questions share a gold answer"
     assert len({p["text"] for q in kept for p in q["layout"] if p["is_supporting"]}) == 2 * len(kept)
@@ -141,6 +155,6 @@ def build(dataset, n_questions=200, k_max=16, out="questions.pkl", seed=0, batch
                  api=llm.summary())
     json.dump(stats, open(out.replace(".pkl", "_stats.json"), "w"), indent=2)
     print(f"Saved {len(kept)} questions to {out} {stats['by_source']}. API: {llm.summary()}")
-    if len(kept) < n_questions:
-        print(f"Only {len(kept)} fresh questions pass every filter.")
+    if len(kept) - len(old) < n_questions:
+        print(f"Only {len(kept) - len(old)} fresh questions pass every filter.")
     return kept

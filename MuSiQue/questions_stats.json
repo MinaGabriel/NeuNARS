@@ -1,30 +1,64 @@
 {
   "validation": {
-    "screened": 440,
-    "unknown": 213,
-    "answerable": 116,
-    "selected": 66,
-    "complete": 66
+    "screened": 367,
+    "unknown": 177,
+    "answerable": 97,
+    "selected": 38,
+    "complete": 38
   },
   "train": {
-    "screened": 800,
-    "unknown": 493,
-    "answerable": 403,
-    "selected": 144,
-    "complete": 134
+    "screened": 3320,
+    "unknown": 2140,
+    "answerable": 1686,
+    "selected": 264,
+    "complete": 262
   },
-  "questions": 200,
+  "extended_from": {
+    "questions": 200,
+    "stats": {
+      "validation": {
+        "screened": 440,
+        "unknown": 213,
+        "answerable": 116,
+        "selected": 66,
+        "complete": 66
+      },
+      "train": {
+        "screened": 800,
+        "unknown": 493,
+        "answerable": 403,
+        "selected": 144,
+        "complete": 134
+      },
+      "questions": 200,
+      "by_source": {
+        "validation": 66,
+        "train": 134
+      },
+      "api": {
+        "model": "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
+        "requests": 7272,
+        "failed": 0,
+        "input_tokens": 1283324,
+        "output_tokens": 681065,
+        "cost_usd": 0.7858
+      },
+      "refacts": "2026-10-30: 396 long paragraphs re-extracted with max_tokens=1024 (384 cut 80 mid-sentence); 6 questions keep a gold answer absent from the facts: indices 2, 14, 90, 128, 182, 191"
+    }
+  },
+  "dataset": "MuSiQue",
+  "questions": 500,
+  "k_max": 16,
   "by_source": {
-    "validation": 66,
-    "train": 134
+    "validation": 104,
+    "train": 396
   },
   "api": {
     "model": "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
-    "requests": 7272,
+    "requests": 15491,
     "failed": 0,
-    "input_tokens": 1283324,
-    "output_tokens": 681065,
-    "cost_usd": 0.7858
-  },
-  "refacts": "2026-10-30: 396 long paragraphs re-extracted with max_tokens=1024 (384 cut 80 mid-sentence); 6 questions keep a gold answer absent from the facts: indices 2, 14, 90, 128, 182, 191"
+    "input_tokens": 2526039,
+    "output_tokens": 982112,
+    "cost_usd": 1.4033
+  }
 }
