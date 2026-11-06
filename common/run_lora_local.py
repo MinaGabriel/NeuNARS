@@ -26,7 +26,9 @@ import experiment as ex
 LORA_NAME = "NARS + 8B + LoRA v2 final"
 ADAPTER_REVISION = "86e4c6d5f9abb2e3b06615bb8d0f01d2b6c8e76a"   # v2, as in the notebooks
 MODEL = "unsloth/Meta-Llama-3.1-8B-Instruct"
-GPU_SETTINGS = {1: ["--cpu-offload-gb", "8", "--gpu-memory-utilization", "0.92"],
+# one GPU: every step streams the offloaded weights over PCIe (3.0 x8 on this server: ~1 s per 8 GB), so offload as
+# little as fits; CUDA graphs take 20+ minutes to capture with offload and gain little
+GPU_SETTINGS = {1: ["--cpu-offload-gb", "5", "--gpu-memory-utilization", "0.95", "--enforce-eager"],
                 2: ["--tensor-parallel-size", "2", "--gpu-memory-utilization", "0.90"]}
 
 
@@ -34,8 +36,9 @@ def start_vllm(adapter, gpus, log):
     command = ["vllm", "serve", MODEL, "--served-model-name", "llama-3.1-8b-instruct", "--dtype", "bfloat16",
                "--enable-lora", "--lora-modules", f"nars-lora={adapter}", "--max-lora-rank", "16",
                "--max-model-len", "16384", "--port", "8000", *GPU_SETTINGS[gpus]]
-    server = subprocess.Popen(command, stdout=open(log, "w"), stderr=subprocess.STDOUT)
-    for minute in range(40):
+    env = {**os.environ, "VLLM_USE_FLASHINFER_SAMPLER": "0"}   # FlashInfer's sampler compiles itself with nvcc (no CUDA toolkit here)
+    server = subprocess.Popen(command, stdout=open(log, "w"), stderr=subprocess.STDOUT, env=env)
+    for minute in range(120):
         time.sleep(30)
         try:
             urllib.request.urlopen("http://localhost:8000/health", timeout=5)
@@ -46,7 +49,7 @@ def start_vllm(adapter, gpus, log):
                 print(open(log).read()[-3000:])
                 raise SystemExit("vLLM stopped: see the log above")
             print(f"starting vLLM... {(minute + 1) / 2:.1f} min")
-    raise SystemExit(f"vLLM did not start in 20 minutes: see {log}")
+    raise SystemExit(f"vLLM did not start in 60 minutes: see {log}")
 
 
 def main():
