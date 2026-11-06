@@ -4,3 +4,5 @@ __pycache__/
 data/
 .deepinfra_key
 */results_old_facts/
+# trace files are 40-200 MB, over GitHub's 100 MB limit: copied with rsync instead
+*/results_final/traces/
